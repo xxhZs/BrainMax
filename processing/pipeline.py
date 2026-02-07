@@ -15,55 +15,65 @@ class MemoryFusionResult(BaseModel):
 
 
 # Prompt for memory fusion and tagging
-FUSION_PROMPT = """你必须严格按照以下 JSON 格式返回结果。
+FUSION_PROMPT = """You must strictly return results in the following JSON format.
 
-任务：分析对话记录，提炼关键信息并为每条信息打上合适的标签
+Task: Analyze conversation records, extract key information and add appropriate tags for each piece. Output multiple memory entries - don't over-merge different information into one.
 
-输出格式示例：
+Output format example:
 [
-    {"content": "用户讨厌香菜", "tags": ["food_preference", "dislike_cilantro", "dietary"]},
-    {"content": "用户喜欢辣味食物", "tags": ["food_preference", "spicy_lover", "taste"]},
-    {"content": "简单的问候", "tags": ["social_greeting", "conversation_start"]},
-    {"content": "《三体》中的黑暗森林法则", "tags": ["book_content", "sci_fi_concept", "theory", "three_body_problem"]}
+    {"content": "User dislikes cilantro", "tags": ["food_preference", "dislike_cilantro", "dietary"]},
+    {"content": "User enjoys spicy food", "tags": ["food_preference", "spicy_lover", "taste"]},
+    {"content": "User mentioned liking Thai cuisine", "tags": ["food_preference", "cuisine_type", "asian_food"]},
+    {"content": "Dark Forest theory from Three Body Problem", "tags": ["book_content", "sci_fi_concept", "theory", "three_body_problem"]}
 ]
 
-字段说明：
-- content: 简短的事实、观点或偏好描述，如果这句话中有时间信息，请保留下来
-- tags: 标签数组，完全由你根据内容自主创建
-  * 标签应该准确描述内容的特征、性质、来源、类型、情绪表达等
-  * 标签可以是任何你认为合适的词汇，不受限制
-  * 标签要有区分度，能帮助后续检索
-  * 标签之间避免重复，如果意义相近，就不要多写一个，尽可能保证标签少
-  * 标签应该是一些概括性的词汇，而不是内容的同义词
-  * 标签的数量不定，不要超过5个
-  * 如果这句话有强烈的喜好和情绪表达，请务必反映在标签中
+Field descriptions:
+- content: Brief description of facts, opinions or preferences. If there is time information, preserve it. Be as complete as possible.
+- tags: Tag array specific to THIS content entry, created completely autonomously by you
+  * Each content entry must have its own independent tags
+  * Tags should accurately describe content characteristics, nature, source, type, emotional expression, etc.
+  * Tags can be any words you consider appropriate, without restrictions
+  * Tags should be distinctive to help with retrieval
+  * Avoid duplicate tags within the same entry; if meanings are similar, don't add another one
+  * Number of tags is flexible per entry, but don't exceed 5 per entry
+  * If the statement has strong preferences or emotional expression, must reflect in tags
 
-规则：
-1. 标签要有意义，有概括性，互相之间意义不要重复，而且标签中不要存在content的同义词汇
-2. 将相关对话合并提炼，要求尽可能将内容表达完整
-3. 标签用中文，content 用中文
-4. 对于你觉得价值极低的话，比如打招呼什么的，请剔除掉
-5. 标签中不要带上时间信息
-6. 只返回 JSON 数组，不要有任何其他文字"""
+Rules:
+1. Output multiple content entries - there is no upper limit on the number of entries
+2. Each entry should cover ONE piece of information with its own tags
+3. Don't over-merge different topics into one entry - keep them separate
+4. Tags must be meaningful, general, non-repetitive in meaning, and must not contain synonyms of content
+5. Merge and refine only closely related dialogues about the SAME topic
+6. Use English for both tags and content
+7. For statements you consider extremely low value (like greetings), please remove them
+8. Do not include time information in tags
+9. Return only the JSON array, no other text"""
 
 # Prompt for consolidating similar memories
-CONSOLIDATION_PROMPT = """你必须严格按照以下 JSON 格式返回结果。
+CONSOLIDATION_PROMPT = """You must strictly return results in the following JSON format.
 
-任务：将以下相似的记忆合并成一条更完整、更简洁的记忆。
+Task: Analyze the following similar memories and merge them intelligently. You can merge them into one, or multiple groups based on their semantic similarity.
 
-输出格式示例：
-{
-    "content": "用户2025年讨厌香菜，很多年前年前就是这样了",
-    "tags": ["food_preference", "dislike_cilantro", "long_term_habit"]
-}
+Output format example:
+[
+    {
+        "content": "User has disliked cilantro since 2025, this preference existed many years before",
+        "tags": ["food_preference", "dislike_cilantro", "long_term_habit"]
+    },
+    {
+        "content": "User enjoys spicy food and hot sauces",
+        "tags": ["food_preference", "spicy_lover", "taste"]
+    }
+]
 
-要求：
-1. 保留所有关键信息（地点、人物、事件），时间只保留最新的，其他的时间相对时间表示
-2. 去除冗余和重复内容
-3. 保持时间线的连贯性
-4. 标签应该覆盖所有原始记忆的标签含义
-5. content 字段要简洁但完整，不超过50字
-6. 只返回 JSON 对象，不要有任何其他文字"""
+Requirements:
+1. Group memories by semantic similarity - if they talk about different topics, keep them separate
+2. For each group, preserve all key information (location, people, events). Keep only the latest time, express other times relatively
+3. Remove redundancy and duplicate content within each group
+4. Maintain timeline coherence
+5. Tags should merge and cover all tags from grouped memories, maximum 10 tags per group. Remove duplicates and similar meanings.
+6. Do not merge content from different subjects.
+7. Return only the JSON array, no other text"""
 
 
 class MemoryPipeline:
@@ -104,7 +114,7 @@ class MemoryPipeline:
             model=self.model,
             messages=[
                 {"role": "system", "content": FUSION_PROMPT},
-                {"role": "user", "content": f"请分析以下对话记录：\n\n{raw_data_str}"}
+                {"role": "user", "content": f"Please analyze the following conversation records:\n\n{raw_data_str}"}
             ],
             temperature=0.3
         )
@@ -134,15 +144,16 @@ class MemoryPipeline:
             print(f"[MemoryPipeline] Raw response: {content}")
             raise ValueError(f"Failed to parse LLM response as JSON: {e}")
     
-    def consolidate_memories(self, memories: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def consolidate_memories(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Consolidate a group of similar memories into one.
+        Consolidate a group of similar memories into one or more consolidated memories.
+        LLM decides how many groups to create based on semantic similarity.
         
         Args:
             memories: List of similar memory items to consolidate.
         
         Returns:
-            Single consolidated memory with content and tags.
+            List of consolidated memories with content and tags.
         """
         # Prepare memories for consolidation
         memories_str = json.dumps(memories, ensure_ascii=False, indent=2)
@@ -151,7 +162,7 @@ class MemoryPipeline:
             model=self.model,
             messages=[
                 {"role": "system", "content": CONSOLIDATION_PROMPT},
-                {"role": "user", "content": f"请合并以下相似的记忆：\n\n{memories_str}"}
+                {"role": "user", "content": f"Please analyze and merge the following similar memories:\n\n{memories_str}"}
             ],
             temperature=0.3
         )
@@ -166,7 +177,12 @@ class MemoryPipeline:
                 content = content.split("```")[1].split("```")[0].strip()
             
             consolidated = json.loads(content)
-            print(f"[MemoryPipeline] Consolidated {len(memories)} memories into 1")
+            
+            # Ensure it's a list
+            if isinstance(consolidated, dict):
+                consolidated = [consolidated]
+            
+            print(f"[MemoryPipeline] Consolidated {len(memories)} memories into {len(consolidated)} groups")
             return consolidated
             
         except json.JSONDecodeError as e:

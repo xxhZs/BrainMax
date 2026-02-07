@@ -25,7 +25,7 @@ class Settings:
     DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
     
     # Memory Management Configuration
-    FLUSH_THRESHOLD = int(os.getenv("FLUSH_THRESHOLD", "5"))
+    FLUSH_THRESHOLD = int(os.getenv("FLUSH_THRESHOLD", "1000"))
     
     @classmethod
     def validate(cls):

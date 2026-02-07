@@ -98,9 +98,8 @@ class AgentMemoryCore:
             content = item.get("content", "")
             tags = item.get("tags", [])
             
-            # Combine content with tags for better embedding
+            # Store only content for embedding (without tags)
             tags_str = ", ".join(tags)
-            content_with_tags = f"{content} [标签: {tags_str}]"
             
             metadata = {
                 "tags": tags_str,
@@ -108,8 +107,8 @@ class AgentMemoryCore:
                 "original_count": len(raw_memories)
             }
             
-            # Store all memories to active collection regardless of tags
-            self.vector_storage.add_active(content_with_tags, metadata)
+            # Store memories with pure content for better semantic matching
+            self.vector_storage.add_active(content, metadata)
             stored_count += 1
             print(f"[AgentMemoryCore] → Stored: [{tags_str}] {content[:60]}...")
         
@@ -189,29 +188,28 @@ class AgentMemoryCore:
                 "tags": all_memories[i]['metadata'].get('tags', '').split(', ')
             } for i in group_indices]
             
-            # Consolidate using LLM
+            # Consolidate using LLM (may return multiple groups)
             try:
-                consolidated = self.pipeline.consolidate_memories(group_memories)
+                consolidated_list = self.pipeline.consolidate_memories(group_memories)
                 
-                # Create new consolidated memory
-                tags_str = ", ".join(consolidated['tags'])
-                content_with_tags = f"{consolidated['content']} [标签: {tags_str}]"
-                
-                metadata = {
-                    "tags": tags_str,
-                    "original_content": consolidated['content'],
-                    "consolidated_from": len(group_indices),
-                    "original_count": sum(all_memories[i]['metadata'].get('original_count', 1) for i in group_indices)
-                }
-                
-                # Store consolidated memory
-                self.vector_storage.add_active(content_with_tags, metadata)
+                # Process each consolidated memory
+                for consolidated in consolidated_list:
+                    tags_str = ", ".join(consolidated['tags'])
+                    
+                    metadata = {
+                        "tags": tags_str,
+                        "original_content": consolidated['content'],
+                        "consolidated_from": len(group_indices),
+                        "original_count": sum(all_memories[i]['metadata'].get('original_count', 1) for i in group_indices)
+                    }
+                    
+                    # Store consolidated memory (without tags in content)
+                    self.vector_storage.add_active(consolidated['content'], metadata)
+                    consolidated_count += 1
+                    print(f"[AgentMemoryCore] ✓ Consolidated memory: {consolidated['content'][:60]}...")
                 
                 # Mark old memories for deletion
                 memories_to_delete.extend([all_memories[i]['id'] for i in group_indices])
-                
-                consolidated_count += 1
-                print(f"[AgentMemoryCore] ✓ Consolidated {len(group_indices)} memories: {consolidated['content'][:60]}...")
                 
             except Exception as e:
                 print(f"[AgentMemoryCore] ✗ Failed to consolidate group: {e}")
