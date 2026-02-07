@@ -72,21 +72,21 @@ class VectorStorage:
         )
         print(f"[VectorStorage] Using {Settings.EMBEDDING_MODEL} ({Settings.EMBEDDING_DIMENSIONS}D) from {Settings.EMBEDDING_BASE_URL}")
         
-        # Collection for fused insights and high-score facts
+        # Collection for active memories (current working set)
         self.active_collection = self.client.get_or_create_collection(
             name="active_memory",
             embedding_function=self.embedding_function,
-            metadata={"description": "Active memory for fused insights and important facts"}
+            metadata={"description": "Active memory for current insights and facts"}
         )
         
-        # Collection for raw logs and low-score items (forgotten memories)
-        self.archive_collection = self.client.get_or_create_collection(
-            name="archive_memory",
+        # Collection for cold storage (pre-consolidation memories)
+        self.cold_collection = self.client.get_or_create_collection(
+            name="cold_memory",
             embedding_function=self.embedding_function,
-            metadata={"description": "Archived memory for raw logs and low-priority items"}
+            metadata={"description": "Cold storage for memories before consolidation"}
         )
         
-        print(f"[VectorStorage] Initialized ChromaDB with {self.active_collection.count()} active and {self.archive_collection.count()} archived memories")
+        print(f"[VectorStorage] Initialized ChromaDB with {self.active_collection.count()} active and {self.cold_collection.count()} cold memories")
     
     def add_active(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -109,34 +109,6 @@ class VectorStorage:
         metadata["added_at"] = datetime.now().isoformat()
         
         self.active_collection.add(
-            documents=[text],
-            metadatas=[metadata],
-            ids=[item_id]
-        )
-        
-        return item_id
-    
-    def add_archive(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Add a memory item to the archive collection.
-        
-        Args:
-            text: The memory content to store.
-            metadata: Optional metadata dictionary.
-        
-        Returns:
-            The generated ID for the stored item.
-        """
-        # Generate unique ID based on content hash + timestamp
-        content_hash = hashlib.md5(text.encode('utf-8')).hexdigest()[:8]
-        item_id = f"archive_{content_hash}_{datetime.now().timestamp()}"
-        
-        # Add metadata if not provided
-        if metadata is None:
-            metadata = {}
-        metadata["archived_at"] = datetime.now().isoformat()
-        
-        self.archive_collection.add(
             documents=[text],
             metadatas=[metadata],
             ids=[item_id]
@@ -207,5 +179,76 @@ class VectorStorage:
         if ids:
             self.active_collection.delete(ids=ids)
             print(f"[VectorStorage] Deleted {len(ids)} memories")
+    
+    def move_to_cold(self, memory_data: List[Dict[str, Any]]) -> List[str]:
+        """
+        Move memories to cold storage.
+        
+        Args:
+            memory_data: List of memory dictionaries with id, document, metadata, embedding.
+        
+        Returns:
+            List of cold storage IDs.
+        """
+        if not memory_data:
+            return []
+        
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        
+        for mem in memory_data:
+            # Generate cold storage ID
+            cold_id = f"cold_{mem['id']}_{datetime.now().timestamp()}"
+            ids.append(cold_id)
+            documents.append(mem['document'])
+            
+            # Add cold storage metadata
+            metadata = mem.get('metadata', {}).copy()
+            metadata['moved_to_cold_at'] = datetime.now().isoformat()
+            metadata['original_id'] = mem['id']
+            metadatas.append(metadata)
+            
+            embeddings.append(mem['embedding'])
+        
+        # Add to cold collection
+        self.cold_collection.add(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings
+        )
+        
+        print(f"[VectorStorage] Moved {len(memory_data)} memories to cold storage")
+        return ids
+    
+    def search_cold(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search the cold memory collection.
+        
+        Args:
+            query: The search query string.
+            top_k: Number of top results to return.
+        
+        Returns:
+            List of dictionaries containing documents and metadata.
+        """
+        results = self.cold_collection.query(
+            query_texts=[query],
+            n_results=top_k
+        )
+        
+        formatted_results = []
+        if results['documents'] and results['documents'][0]:
+            for i in range(len(results['documents'][0])):
+                formatted_results.append({
+                    "id": results['ids'][0][i],
+                    "document": results['documents'][0][i],
+                    "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
+                    "distance": results['distances'][0][i] if 'distances' in results else None
+                })
+        
+        return formatted_results
 
 
